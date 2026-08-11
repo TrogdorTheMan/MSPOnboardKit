@@ -32,7 +32,7 @@ Work through the sections in order. Do not skip ahead.
 
 When a new person joins the company, someone normally has to do all of this by hand:
 
-- Create their user account
+- Create their user account, in the right place
 - Invent an email address for them and check nobody already has it
 - Set a hidden field called `proxyAddresses` so email works properly
 - Look at an existing employee and copy every group they are in
@@ -45,7 +45,7 @@ This toolkit does all of that with two commands.
 
 | Step | Script | What happens |
 |---|---|---|
-| 1 | `New-OnboardUser.ps1` | Creates the account, sets the email address, copies groups, pushes to Microsoft 365 |
+| 1 | `New-OnboardUser.ps1` | Creates the account in the right OU, sets the email address, copies groups from an existing employee, pushes to Microsoft 365 |
 | 2 | `Add-OnboardUserLicense.ps1` | Gives them their Microsoft 365 license |
 
 They are two separate commands on purpose. After step 1, the account has to travel from your
@@ -425,8 +425,11 @@ You will get a list like this:
 
 --- Active Directory ---
 [ PASS ] Domain reachable - contoso.com
-[ PASS ] DefaultTargetOU - OU=Users,OU=Company,DC=contoso,DC=com
+[ PASS ] DefaultTargetOU - OU=Standard users,OU=Company,DC=contoso,DC=com
 [ PASS ] Group 'All Staff' - Exists.
+[ PASS ] ProtectedOU 'OU=Admin,OU=Company,DC=contoso,DC=com' - Exists.
+[ PASS ] UPN suffix - 'contoso.com' is available as a sign-in suffix.
+[ PASS ] Existing email domain - Existing staff use @contoso.com, matching your config (@contoso.com x42).
 [ PASS ] Directory sync - Entra Connect is installed on this machine.
 ```
 
@@ -462,8 +465,15 @@ You will see something like this:
 ```
  DRY RUN (-WhatIf): nothing will be created or changed.
 
+==> Looking up the mirror user
+    [ ok ] Found: John Doe (jdoe)
+
+==> Working out where to create the account
+    [ ok ] Target OU: OU=Standard users,OU=Company,DC=contoso,DC=com
+           Chosen because: copied from mirror user jdoe
+
 ==> Checking the target OU exists
-    [ ok ] Found: OU=Users,OU=Company,DC=contoso,DC=com
+    [ ok ] Found: OU=Standard users,OU=Company,DC=contoso,DC=com
 
 ==> Working out the email alias
            Template '{first:1}{last}' gives: tuser
@@ -472,7 +482,6 @@ You will see something like this:
 
 ==> Working out group membership
            Copying groups from mirror user: jdoe
-           Found: John Doe (jdoe)
     [ ok ] 3 group(s) to add:
              - All Staff
              - Accounting
@@ -482,12 +491,22 @@ You will see something like this:
 **What to check before going further:**
 
 1. **The email address** is in your company's normal format
-2. **The group list** matches what the mirror user actually has — open the mirror user in
+2. **The target OU, and the reason given for it.** If it says *copied from mirror user*, the new
+   hire is being created in the same OU as that person — check that is where they belong. If it
+   says *DefaultTargetOU from your config file*, check that is right for this person
+3. **The group list** matches what the mirror user actually has — open the mirror user in
    Active Directory Users and Computers, look at their **Member Of** tab, and compare
-3. **The OU** is where staff accounts really belong
 
 If any of that is wrong, fix your config file and run the dry run again. Nothing has been
 created, so there is nothing to undo.
+
+If the OU is not what you want for this particular person, you do not need to change any
+configuration — just say where it should go:
+
+```powershell
+.\New-OnboardUser.ps1 -FirstName Test -LastName User -MirrorUser jdoe `
+    -TargetOU 'OU=Standard users,OU=Company,DC=contoso,DC=com' -WhatIf
+```
 
 ---
 
@@ -501,6 +520,11 @@ Once the dry run looks right, run the **same command without `-WhatIf`**:
 
 It will ask you to confirm before creating anything. Type `Y` and press Enter.
 
+Naming a mirror user copies **two** things: their group memberships, and the OU they sit in.
+Both matter — see ["Why placement matters"](#why-placement-matters). Pick someone who is
+already doing the job this new person will be doing, and pass `-TargetOU` if you need the
+account somewhere else.
+
 ### If there is no mirror user
 
 Sometimes there is nobody suitable to copy. Leave `-MirrorUser` out entirely:
@@ -508,6 +532,9 @@ Sometimes there is nobody suitable to copy. Leave `-MirrorUser` out entirely:
 ```powershell
 .\New-OnboardUser.ps1 -FirstName John -LastName Smith
 ```
+
+The new hire is then created in `DefaultTargetOU` with the `DefaultGroups` from your config
+file.
 
 The new hire then gets whatever is listed in `DefaultGroups` in your config file. If that list
 is empty, they are created with no groups and you can add them by hand afterwards.
