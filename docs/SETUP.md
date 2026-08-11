@@ -238,6 +238,26 @@ This toolkit uses **group-based licensing**. Instead of assigning a license to e
 at a time, you create a group, attach the license to the group, and anyone added to that group
 automatically receives it.
 
+> ### ⚠️ Create this group in Entra ID — **not** in Active Directory
+>
+> This is the single easiest mistake to make here, and it is worth understanding before you
+> start.
+>
+> Every other group at your company probably lives in Active Directory, so making this one in
+> **Active Directory Users and Computers** feels natural. It does not work. Groups that sync up
+> from your local Active Directory are **read-only in Microsoft 365** — the cloud will not let
+> anything change their membership, because your local AD is treated as the source of truth.
+>
+> If you create the licensing group that way, everything looks fine until the licensing step
+> runs, and then it fails on every single new hire.
+>
+> The group must be created at <https://entra.microsoft.com>, as described below. It also must
+> be a **Security** (or Microsoft 365) group with **Assigned** membership — a distribution
+> group cannot take members this way, and a dynamic group decides its own membership by rule.
+>
+> `Test-OnboardKitSetup.ps1 -IncludeCloud` checks all of this for you and will say plainly if
+> the group is wrong.
+
 ### Create the licensing group
 
 1. Go to <https://entra.microsoft.com> and sign in as an administrator
@@ -624,6 +644,46 @@ use `-Wait`.
 
 If it has still not arrived after 30 minutes, the sync is not running. Check with whoever
 manages the Entra Connect server.
+
+### "...is synchronised up from your on-premises Active Directory"
+
+The licensing group was created in Active Directory and syncs up to Microsoft 365, which makes
+it read-only in the cloud — nothing can add members to it there.
+
+This cannot be fixed by changing permissions. You need a **different group**, created directly
+in Entra ID:
+
+1. Go to <https://entra.microsoft.com> → **Groups** → **New group**
+2. Group type **Security**, membership type **Assigned**
+3. Give it a name — `LIC-M365-E3` or similar
+4. Attach the license to it (see [section 5](#5-one-time-microsoft-365-setup))
+5. Put the new name in `Licensing.GroupNames` in your config file
+
+The old on-prem group can stay where it is; it just is not used for licensing.
+
+### "...uses dynamic membership"
+
+The group decides its own members from a rule, so nobody can be added by hand.
+
+Either switch the group's membership type to **Assigned** in Entra ID, or leave the rule alone
+and let it pick up new hires by itself — in which case you do not need the licensing step at
+all, and can skip it.
+
+### "...is a distribution group" / "is not a security group"
+
+Microsoft 365 only allows members to be added to **security groups** and **Microsoft 365
+groups**. Create a Security group in Entra ID and attach the license to that one instead.
+
+### "...does not appear to have any licences attached"
+
+The group exists and members can be added, but no license is attached to it — so joining it
+gives the new hire nothing.
+
+An administrator needs to attach it: <https://entra.microsoft.com> → **Billing** → **Licenses**
+→ **All products** → tick the license → **Assign** → choose the group.
+
+If you know the license *is* attached, this may just mean your account cannot read that
+setting. It is a warning rather than an error, so the script carries on regardless.
 
 ### "No group with this exact display name exists in Entra ID"
 

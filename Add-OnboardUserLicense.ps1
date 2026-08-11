@@ -407,7 +407,12 @@ $groupsFailed  = New-Object System.Collections.Generic.List[object]
 foreach ($groupName in $licensingGroups) {
 
     $escapedName = $groupName -replace "'", "''"
-    $group = @(Get-MgGroup -Filter "displayName eq '$escapedName'" -ErrorAction SilentlyContinue) |
+
+    # assignedLicenses is NOT returned by default - without an explicit
+    # -Property it always reads as empty, so it has to be selected here. And
+    # once -Property is used, everything else needed must be listed too.
+    $group = @(Get-MgGroup -Filter "displayName eq '$escapedName'" -ErrorAction SilentlyContinue `
+                   -Property 'id,displayName,onPremisesSyncEnabled,groupTypes,securityEnabled,mailEnabled,assignedLicenses') |
         Select-Object -First 1
 
     if (-not $group) {
@@ -417,6 +422,32 @@ foreach ($groupName in $licensingGroups) {
         })
         Write-Fail "'$groupName' does not exist in Entra ID."
         Write-Detail 'Check the spelling in your config file. The name must match exactly.'
+        continue
+    }
+
+    # Checked before attempting the add, because the underlying failure is an
+    # opaque 403 that tells the technician nothing.
+    $verdict = Test-OnboardLicensingGroup -Group $group
+
+    foreach ($warning in $verdict.Warnings) {
+        Write-Warn $warning.Message
+        foreach ($line in ($warning.Fix -split "`r?`n")) {
+            if ($line.Trim()) { Write-Detail $line }
+        }
+    }
+
+    if (-not $verdict.IsUsable) {
+        $groupsFailed.Add([pscustomobject]@{
+            Group  = $groupName
+            Reason = ($verdict.Problems | ForEach-Object { $_.Message }) -join ' '
+        })
+
+        foreach ($problem in $verdict.Problems) {
+            Write-Fail $problem.Message
+            foreach ($line in ($problem.Fix -split "`r?`n")) {
+                if ($line.Trim()) { Write-Detail $line }
+            }
+        }
         continue
     }
 
@@ -437,11 +468,20 @@ foreach ($groupName in $licensingGroups) {
         Write-Ok "Added to '$groupName'"
     }
     catch {
+        $reason = $_.Exception.Message
+
+        # Backstop for anything the checks above did not catch. This particular
+        # message is what Graph returns for a group synced from on-premises AD,
+        # and on its own it means nothing to the person reading it.
+        if ($reason -match 'originated within an external service') {
+            $reason += " This usually means '$groupName' is synchronised from your on-premises Active Directory and cannot be changed from the cloud - see docs/SETUP.md section 5."
+        }
+
         $groupsFailed.Add([pscustomobject]@{
             Group  = $groupName
-            Reason = $_.Exception.Message
+            Reason = $reason
         })
-        Write-Fail "Could not add to '$groupName': $($_.Exception.Message)"
+        Write-Fail "Could not add to '$groupName': $reason"
     }
 }
 
@@ -500,9 +540,11 @@ if ($PassThru) {
     [pscustomobject][ordered]@{
         UserPrincipalName = $UserPrincipalName
         DisplayName       = $cloudUser.DisplayName
-        GroupsAdded       = @($groupsAdded)
-        GroupsSkipped     = @($groupsSkipped)
-        GroupsFailed      = @($groupsFailed)
+        # .ToArray(), not @( ): a generic List inside a hashtable makes the
+        # [pscustomobject] cast throw "Argument types do not match" on PS 5.1.
+        GroupsAdded       = $groupsAdded.ToArray()
+        GroupsSkipped     = $groupsSkipped.ToArray()
+        GroupsFailed      = $groupsFailed.ToArray()
         WhatIf            = [bool]$WhatIfPreference
     }
 }

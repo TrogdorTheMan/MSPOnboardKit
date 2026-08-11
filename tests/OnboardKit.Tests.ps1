@@ -371,6 +371,165 @@ Describe 'Import-OnboardKitConfig' {
 }
 
 
+Describe 'Test-OnboardLicensingGroup' {
+
+    BeforeAll {
+        # Fabricates a group object shaped like one from Get-MgGroup. Defaults
+        # describe a healthy, usable licensing group; each test overrides only
+        # the one property it cares about.
+        function New-TestGroup {
+            param(
+                $DisplayName           = 'LIC-M365-E3',
+                $OnPremisesSyncEnabled = $null,
+                $GroupTypes            = @(),
+                $SecurityEnabled       = $true,
+                $MailEnabled           = $false,
+                $AssignedLicenses      = @(@{ SkuId = '05e9a617-0261-4cee-bb44-138d3ef5d965' })
+            )
+
+            [pscustomobject]@{
+                Id                    = '00000000-0000-0000-0000-000000000001'
+                DisplayName           = $DisplayName
+                OnPremisesSyncEnabled = $OnPremisesSyncEnabled
+                GroupTypes            = $GroupTypes
+                SecurityEnabled       = $SecurityEnabled
+                MailEnabled           = $MailEnabled
+                AssignedLicenses      = $AssignedLicenses
+            }
+        }
+    }
+
+    Context 'a healthy group' {
+
+        It 'accepts a cloud security group with a licence attached' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup)
+
+            $verdict.IsUsable          | Should -BeTrue
+            $verdict.Problems.Count    | Should -Be 0
+            $verdict.Warnings.Count    | Should -Be 0
+            $verdict.GroupName         | Should -Be 'LIC-M365-E3'
+        }
+
+        It 'accepts a Microsoft 365 (Unified) group even though it is not security-enabled' {
+            $group = New-TestGroup -GroupTypes @('Unified') -SecurityEnabled $false -MailEnabled $true
+
+            (Test-OnboardLicensingGroup -Group $group).IsUsable | Should -BeTrue
+        }
+    }
+
+    Context 'synced from on-premises Active Directory' {
+
+        It 'blocks a group that is currently synced' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -OnPremisesSyncEnabled $true)
+
+            $verdict.IsUsable                  | Should -BeFalse
+            $verdict.Problems.Code             | Should -Contain 'SyncedFromOnPrem'
+            $verdict.Problems[0].Fix           | Should -Match 'entra\.microsoft\.com'
+        }
+
+        # Graph reports null for a group that has never synced. Treating that
+        # as "synced" would block every correctly-created cloud group, so this
+        # is the case most worth pinning down.
+        It 'allows a cloud-only group, which reports null rather than false' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -OnPremisesSyncEnabled $null)
+
+            $verdict.IsUsable      | Should -BeTrue
+            $verdict.Problems.Code | Should -Not -Contain 'SyncedFromOnPrem'
+        }
+
+        It 'allows a group that used to sync but no longer does' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -OnPremisesSyncEnabled $false)
+
+            $verdict.IsUsable | Should -BeTrue
+        }
+    }
+
+    Context 'membership that cannot be assigned by hand' {
+
+        It 'blocks a dynamic group' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -GroupTypes @('DynamicMembership'))
+
+            $verdict.IsUsable      | Should -BeFalse
+            $verdict.Problems.Code | Should -Contain 'DynamicMembership'
+        }
+
+        It 'blocks a distribution group' {
+            $group = New-TestGroup -SecurityEnabled $false -MailEnabled $true
+
+            $verdict = Test-OnboardLicensingGroup -Group $group
+
+            $verdict.IsUsable      | Should -BeFalse
+            $verdict.Problems.Code | Should -Contain 'NotMemberManageable'
+            ($verdict.Problems | Where-Object Code -eq 'NotMemberManageable').Message |
+                Should -Match 'distribution group'
+        }
+
+        It 'does not guess when securityEnabled was never returned' {
+            # A null securityEnabled means the property was not selected, not
+            # that the group is unusable. Guessing here would block a good group.
+            $group = New-TestGroup -SecurityEnabled $null
+
+            (Test-OnboardLicensingGroup -Group $group).IsUsable | Should -BeTrue
+        }
+    }
+
+    Context 'no licence attached' {
+
+        It 'warns but does not block when assignedLicenses is empty' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -AssignedLicenses @())
+
+            $verdict.IsUsable       | Should -BeTrue
+            $verdict.Problems.Count | Should -Be 0
+            $verdict.Warnings.Code  | Should -Contain 'NoLicensesAssigned'
+        }
+
+        It 'warns when assignedLicenses is absent entirely' {
+            $verdict = Test-OnboardLicensingGroup -Group (New-TestGroup -AssignedLicenses $null)
+
+            $verdict.Warnings.Code | Should -Contain 'NoLicensesAssigned'
+        }
+    }
+
+    Context 'robustness' {
+
+        It 'does not throw on an object missing all the properties it reads' {
+            # StrictMode makes reading an absent property an error, and Graph
+            # objects vary with whatever was selected.
+            { Test-OnboardLicensingGroup -Group ([pscustomobject]@{ Id = 'abc' }) } |
+                Should -Not -Throw
+        }
+
+        It 'falls back to a placeholder name when displayName is missing' {
+            $verdict = Test-OnboardLicensingGroup -Group ([pscustomobject]@{ Id = 'abc' })
+
+            $verdict.GroupName | Should -Be '(unnamed group)'
+        }
+
+        It 'reports every problem at once rather than stopping at the first' {
+            $group = New-TestGroup -OnPremisesSyncEnabled $true -GroupTypes @('DynamicMembership')
+
+            $verdict = Test-OnboardLicensingGroup -Group $group
+
+            $verdict.Problems.Count | Should -Be 2
+            $verdict.Problems.Code  | Should -Contain 'SyncedFromOnPrem'
+            $verdict.Problems.Code  | Should -Contain 'DynamicMembership'
+        }
+
+        It 'gives every problem and warning a code, a message and a fix' {
+            $group = New-TestGroup -OnPremisesSyncEnabled $true -AssignedLicenses @()
+
+            $verdict = Test-OnboardLicensingGroup -Group $group
+
+            foreach ($item in @($verdict.Problems) + @($verdict.Warnings)) {
+                $item.Code    | Should -Not -BeNullOrEmpty
+                $item.Message | Should -Not -BeNullOrEmpty
+                $item.Fix     | Should -Not -BeNullOrEmpty
+            }
+        }
+    }
+}
+
+
 Describe 'config.example.psd1' {
 
     It 'is present in the repository' {

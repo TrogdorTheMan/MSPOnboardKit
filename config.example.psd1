@@ -101,6 +101,17 @@
     # Put the DISPLAY NAMES of the already-existing Entra ID groups that
     # already hand out licenses. Adding the new hire to these groups is what
     # gives them their license.
+    #
+    # THE GROUPS MUST BE CREATED IN ENTRA ID, NOT IN ACTIVE DIRECTORY.
+    # It is a natural mistake to make these in Active Directory Users and
+    # Computers alongside all your other groups and let them sync up. That
+    # does not work: Microsoft 365 will not let anything change the membership
+    # of a group that came from your local AD, so the licensing step can never
+    # add anyone to it. They must be created at https://entra.microsoft.com,
+    # as Security groups with 'Assigned' (not dynamic) membership.
+    #
+    # Run Test-OnboardKitSetup.ps1 -IncludeCloud and it will tell you whether
+    # your groups are set up correctly.
     # -----------------------------------------------------------------------
     Licensing = @{
 

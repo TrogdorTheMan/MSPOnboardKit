@@ -461,8 +461,10 @@ if ($targetGroups.Count -gt 0) {
         }
     }
 
-    $summary.GroupsAdded  = @($groupsAdded)
-    $summary.GroupsFailed = @($groupsFailed)
+    # .ToArray(), not @( ): a generic List left in the summary makes the
+    # [pscustomobject] cast at the end of the script throw on PS 5.1.
+    $summary.GroupsAdded  = $groupsAdded.ToArray()
+    $summary.GroupsFailed = $groupsFailed.ToArray()
 }
 
 #endregion

@@ -16,6 +16,7 @@
         'Test-OnboardAliasInUse'
         'Get-UniqueOnboardAlias'
         'New-OnboardTempPassword'
+        'Test-OnboardLicensingGroup'
     )
 
     CmdletsToExport   = @()

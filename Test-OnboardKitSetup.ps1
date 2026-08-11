@@ -390,16 +390,36 @@ else {
 
         foreach ($groupName in $config.Licensing.GroupNames) {
             $escapedName = $groupName -replace "'", "''"
-            $group = @(Get-MgGroup -Filter "displayName eq '$escapedName'" -ErrorAction SilentlyContinue) |
+
+            # assignedLicenses is not returned unless explicitly selected, and
+            # selecting anything means selecting everything needed.
+            $group = @(Get-MgGroup -Filter "displayName eq '$escapedName'" -ErrorAction SilentlyContinue `
+                           -Property 'id,displayName,onPremisesSyncEnabled,groupTypes,securityEnabled,mailEnabled,assignedLicenses') |
                 Select-Object -First 1
 
-            if ($group) {
-                Add-Result -Check "Licensing group '$groupName'" -Status 'Pass' -Message "Found (id $($group.Id))."
-            }
-            else {
+            if (-not $group) {
                 Add-Result -Check "Licensing group '$groupName'" -Status 'Fail' `
                     -Message 'No group with this exact display name exists in Entra ID.' `
                     -Fix "Check the spelling in config.psd1. If the group does not exist yet, a tenant administrator needs to create it and assign the license SKUs. See docs/SETUP.md section 5."
+                continue
+            }
+
+            # Catching an unusable group here - at setup time - is the whole
+            # point. The alternative is discovering it mid-onboarding.
+            $verdict = Test-OnboardLicensingGroup -Group $group
+
+            if ($verdict.IsUsable -and $verdict.Warnings.Count -eq 0) {
+                Add-Result -Check "Licensing group '$groupName'" -Status 'Pass' -Message "Found and usable (id $($group.Id))."
+            }
+
+            foreach ($problem in $verdict.Problems) {
+                Add-Result -Check "Licensing group '$groupName'" -Status 'Fail' `
+                    -Message $problem.Message -Fix $problem.Fix
+            }
+
+            foreach ($warning in $verdict.Warnings) {
+                Add-Result -Check "Licensing group '$groupName'" -Status 'Warn' `
+                    -Message $warning.Message -Fix $warning.Fix
             }
         }
     }

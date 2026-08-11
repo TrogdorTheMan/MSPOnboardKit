@@ -523,6 +523,212 @@ function New-OnboardTempPassword {
 }
 
 
+function Get-OnboardObjectProperty {
+    <#
+    .SYNOPSIS
+        Reads a property that may not be present, without tripping StrictMode.
+
+    .DESCRIPTION
+        This module runs under Set-StrictMode -Version Latest, where reading a
+        property an object does not have is an error rather than $null. Graph
+        objects vary depending on which properties were selected, so every
+        read of them has to go through here.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        $InputObject,
+
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
+
+function Get-OnboardObjectArrayProperty {
+    <#
+    .SYNOPSIS
+        Reads a possibly-absent property as an array, treating null as empty.
+
+    .DESCRIPTION
+        Exists because @($null) in PowerShell is an array of length one
+        containing $null, not an empty array - so a plain @() wrapper around a
+        missing property would report Count = 1 and quietly break every
+        emptiness check built on it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        $InputObject,
+
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    $value = Get-OnboardObjectProperty -InputObject $InputObject -Name $Name
+
+    # The leading comma matters. 'return @()' unrolls to nothing, so the caller
+    # gets $null and any .Count on it throws under StrictMode; 'return @($x)'
+    # for a single item unrolls to the bare item. Wrapping in an outer array
+    # means the unrolling hands back the real array.
+    if ($null -eq $value) {
+        return ,@()
+    }
+
+    return ,@($value)
+}
+
+
+function Test-OnboardLicensingGroup {
+    <#
+    .SYNOPSIS
+        Checks whether a licensing group can actually be used to license someone.
+
+    .DESCRIPTION
+        Takes a group object already fetched from Microsoft Graph and reports
+        whether members can be added to it, and whether doing so would grant a
+        licence. Catching this up front matters because the underlying failure
+        is a bare HTTP 403 or a message about objects "originated within an
+        external service", neither of which explains anything to the person
+        reading it.
+
+        Deliberately makes no Graph calls of its own. That keeps this module
+        free of any dependency on the Microsoft.Graph modules, and lets the
+        tests cover every branch with fabricated objects and no tenant.
+
+        The caller must have selected these properties, since assignedLicenses
+        is not returned by default:
+
+            id, displayName, onPremisesSyncEnabled, groupTypes,
+            securityEnabled, mailEnabled, assignedLicenses
+
+    .PARAMETER Group
+        A group object from Get-MgGroup.
+
+    .OUTPUTS
+        An object with IsUsable, Problems and Warnings. Problems block the add;
+        Warnings do not. Each carries Code, Message and Fix.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNull()]
+        $Group
+    )
+
+    $problems = New-Object System.Collections.Generic.List[object]
+    $warnings = New-Object System.Collections.Generic.List[object]
+
+    $displayName = Get-OnboardObjectProperty -InputObject $Group -Name 'DisplayName'
+    if (-not $displayName) {
+        $displayName = '(unnamed group)'
+    }
+
+    $syncEnabled      = Get-OnboardObjectProperty      -InputObject $Group -Name 'OnPremisesSyncEnabled'
+    $securityEnabled  = Get-OnboardObjectProperty      -InputObject $Group -Name 'SecurityEnabled'
+    $mailEnabled      = Get-OnboardObjectProperty      -InputObject $Group -Name 'MailEnabled'
+    $groupTypes       = Get-OnboardObjectArrayProperty -InputObject $Group -Name 'GroupTypes'
+    $assignedLicenses = Get-OnboardObjectArrayProperty -InputObject $Group -Name 'AssignedLicenses'
+
+    $isUnified = $groupTypes -contains 'Unified'
+
+    # Compared against $true explicitly: Graph reports null for a group that
+    # has never synced, false for one that used to. Only true means "synced
+    # right now, and therefore read-only in the cloud".
+    if ($syncEnabled -eq $true) {
+        $problems.Add([pscustomobject]@{
+            Code    = 'SyncedFromOnPrem'
+            Message = "'$displayName' is synchronised up from your on-premises Active Directory, so its membership cannot be changed from the cloud."
+            Fix     = @"
+Microsoft 365 does not allow membership changes to groups that came from your
+local Active Directory - they have to be changed in Active Directory instead.
+
+Create a NEW group directly in Entra ID:
+    https://entra.microsoft.com  >  Groups  >  New group
+Attach the licence to that new group, then put its name in Licensing.GroupNames
+in your config file.
+
+See docs/SETUP.md section 5.
+"@
+        })
+    }
+
+    if ($groupTypes -contains 'DynamicMembership') {
+        $problems.Add([pscustomobject]@{
+            Code    = 'DynamicMembership'
+            Message = "'$displayName' uses dynamic membership, so who belongs to it is decided by a rule and members cannot be added by hand."
+            Fix     = @"
+Either change the group's membership type to 'Assigned' in Entra ID, or leave
+the rule in place and let it pick up new hires automatically - in which case
+you do not need this script to assign the licence at all.
+"@
+        })
+    }
+
+    # Only flagged when securityEnabled is definitively false. If the property
+    # was not selected it reads as null, and guessing from that would block a
+    # perfectly good group.
+    if ($securityEnabled -eq $false -and -not $isUnified) {
+        $groupKind = if ($mailEnabled -eq $true) { 'a distribution group' } else { 'not a security group' }
+        $problems.Add([pscustomobject]@{
+            Code    = 'NotMemberManageable'
+            Message = "'$displayName' is $groupKind. Microsoft 365 only allows members to be added to security groups and Microsoft 365 groups."
+            Fix     = @"
+Create a security group in Entra ID and attach the licence to that one instead:
+    https://entra.microsoft.com  >  Groups  >  New group  >  Group type: Security
+
+See docs/SETUP.md section 5.
+"@
+        })
+    }
+
+    # A warning rather than a problem: the add genuinely succeeds here. If this
+    # property could not be read for a permissions reason, treating it as fatal
+    # would block a real onboarding over a false alarm.
+    if ($assignedLicenses.Count -eq 0) {
+        $warnings.Add([pscustomobject]@{
+            Code    = 'NoLicensesAssigned'
+            Message = "'$displayName' does not appear to have any licences attached, so joining it may not give anyone a licence."
+            Fix     = @"
+An administrator needs to attach the licence to the group:
+    https://entra.microsoft.com  >  Billing  >  Licenses  >  All products
+    tick the licence  >  Assign  >  choose this group
+
+If you know the licence is already attached, this may just mean your account
+cannot read that setting, and you can ignore it.
+
+See docs/SETUP.md section 5.
+"@
+        })
+    }
+
+    # .ToArray() rather than @( ): casting a hashtable to [pscustomobject]
+    # throws "Argument types do not match" in Windows PowerShell 5.1 if any
+    # value is a generic List, and @( ) does not convert it.
+    return [pscustomobject]@{
+        GroupName = $displayName
+        IsUsable  = ($problems.Count -eq 0)
+        Problems  = $problems.ToArray()
+        Warnings  = $warnings.ToArray()
+    }
+}
+
+
 Export-ModuleMember -Function @(
     'Import-OnboardKitConfig'
     'ConvertTo-OnboardNameToken'
@@ -531,4 +737,5 @@ Export-ModuleMember -Function @(
     'Test-OnboardAliasInUse'
     'Get-UniqueOnboardAlias'
     'New-OnboardTempPassword'
+    'Test-OnboardLicensingGroup'
 )
