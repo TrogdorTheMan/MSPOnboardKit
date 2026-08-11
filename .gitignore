@@ -1,0 +1,25 @@
+# ---------------------------------------------------------------------------
+# Real client configuration - NEVER commit this.
+# Only config.example.psd1 (placeholders) belongs in the repository.
+# ---------------------------------------------------------------------------
+config.psd1
+config.*.psd1
+!config.example.psd1
+*.local.psd1
+
+# Credentials, certificates, secrets
+*.pfx
+*.p12
+*.cer
+*.key
+.env
+
+# Run output
+logs/
+*.log
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
