@@ -72,6 +72,48 @@
     )
 
     # -----------------------------------------------------------------------
+    # OPTIONAL - should a new hire be created in the SAME OU as the mirror
+    # user, instead of DefaultTargetOU above?
+    #
+    # $true  (recommended) - "make them like Jane" also means "put them where
+    #                        Jane is". This matters when your OUs have Group
+    #                        Policy attached to them - things like USB
+    #                        restrictions or VPN access are often applied by
+    #                        which OU an account sits in, not by group
+    #                        membership. Copying Jane's groups but leaving the
+    #                        new hire somewhere else would silently miss those.
+    #
+    # $false               - always use DefaultTargetOU. Fine if all your user
+    #                        accounts live in one OU anyway.
+    #
+    # Passing -TargetOU on the command line always wins over both.
+    # -----------------------------------------------------------------------
+    MirrorTargetOU = $true
+
+    # -----------------------------------------------------------------------
+    # OPTIONAL - OUs that a new hire must NEVER be put into automatically.
+    #
+    # Only relevant when MirrorTargetOU is $true. Consider someone asking you
+    # to "copy Dave's access" where Dave is a domain administrator: without
+    # this list, the new starter would be created in the Admin OU and pick up
+    # administrator Group Policy along with Dave's groups.
+    #
+    # List the OUs that hold administrator accounts, service accounts, or
+    # equipment rather than ordinary staff. Child OUs are covered
+    # automatically, so listing a parent is enough.
+    #
+    # If a mirror user is found in one of these, the script stops and tells
+    # you to pass -TargetOU explicitly - it never silently guesses.
+    #
+    # Example:
+    #   ProtectedOUs = @(
+    #       'OU=Admin,OU=Company Users,DC=example,DC=com'
+    #       'OU=Service Accounts,DC=example,DC=com'
+    #   )
+    # -----------------------------------------------------------------------
+    ProtectedOUs = @()
+
+    # -----------------------------------------------------------------------
     # OPTIONAL - the server that runs Entra Connect (the tool that copies
     # your on-premises accounts up to Microsoft 365).
     #

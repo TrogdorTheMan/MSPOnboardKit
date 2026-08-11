@@ -189,19 +189,102 @@ if ($Server) {
     $adCommon['Server'] = $Server
 }
 
-$ou = if ($TargetOU) { $TargetOU } else { $config.DefaultTargetOU }
-
 Write-Host ''
 Write-Host '=========================================================' -ForegroundColor White
 Write-Host ' MSPOnboardKit - new user provisioning' -ForegroundColor White
 Write-Host '=========================================================' -ForegroundColor White
 Write-Detail "Config file : $($config.ConfigPath)"
 Write-Detail "Domain      : $($config.Domain)"
-Write-Detail "Target OU   : $ou"
 
 if ($WhatIfPreference) {
     Write-Host ''
     Write-Host ' DRY RUN (-WhatIf): nothing will be created or changed.' -ForegroundColor Yellow
+}
+
+#endregion
+
+
+#region Look up the mirror user ----------------------------------------------
+
+# Fetched here rather than further down, because where the new account gets
+# created depends on where this person lives. Reused later for their groups,
+# so Active Directory is only asked once.
+$mirror = $null
+
+if ($MirrorUser) {
+
+    Write-Step "Looking up the mirror user"
+
+    try {
+        $mirror = Get-ADUser -Identity $MirrorUser -Properties MemberOf, DisplayName, DistinguishedName @adCommon
+    }
+    catch {
+        throw @"
+Could not find the mirror user '$MirrorUser'.
+
+Use their logon name (sAMAccountName), not their display name or email
+address. For example 'jdoe', not 'John Doe' and not 'jdoe@$($config.Domain)'.
+
+Active Directory reported: $($_.Exception.Message)
+"@
+    }
+
+    $mirrorLabel = if ($mirror.DisplayName) { "$($mirror.DisplayName) ($MirrorUser)" } else { $MirrorUser }
+    Write-Ok "Found: $mirrorLabel"
+}
+
+#endregion
+
+
+#region Decide which OU to create the account in -----------------------------
+
+Write-Step "Working out where to create the account"
+
+# Precedence: an explicit -TargetOU always wins; otherwise follow the mirror
+# user; otherwise fall back to the config default.
+if ($TargetOU) {
+    $ou       = $TargetOU
+    $ouReason = 'you passed -TargetOU'
+}
+elseif ($mirror -and $config.MirrorTargetOU) {
+
+    $mirrorOu = Get-OnboardParentOU -DistinguishedName $mirror.DistinguishedName
+
+    # The guard blocks only the inferred path. Someone who really means to
+    # create an account in a protected OU can still say so with -TargetOU.
+    if (Test-OnboardProtectedOU -DistinguishedName $mirrorOu -ProtectedOUs $config.ProtectedOUs) {
+        throw @"
+The mirror user '$MirrorUser' is in an OU that is marked as protected:
+
+    $mirrorOu
+
+Refusing to create a new hire there automatically. Protected OUs usually hold
+administrator accounts, service accounts or equipment - putting an ordinary
+new starter in one would quietly give them the wrong policies.
+
+If that really is where this account belongs, say so explicitly:
+
+    -TargetOU '$mirrorOu'
+
+Otherwise pick a different mirror user, or pass the correct OU with -TargetOU.
+The protected list is ProtectedOUs in $($config.ConfigPath).
+"@
+    }
+
+    $ou       = $mirrorOu
+    $ouReason = "copied from mirror user $MirrorUser"
+}
+else {
+    $ou       = $config.DefaultTargetOU
+    $ouReason = 'DefaultTargetOU from your config file'
+}
+
+Write-Ok "Target OU: $ou"
+Write-Detail "Chosen because: $ouReason"
+
+if ($mirror -and -not $TargetOU -and -not $config.MirrorTargetOU) {
+    Write-Detail 'MirrorTargetOU is turned off in your config, so the mirror user'
+    Write-Detail 'has been used for groups only, not for placement.'
 }
 
 #endregion
@@ -274,26 +357,10 @@ Write-Step "Working out group membership"
 
 $targetGroups = New-Object System.Collections.Generic.List[object]
 
-if ($MirrorUser) {
+if ($mirror) {
 
+    # Already fetched further up, when working out the target OU.
     Write-Detail "Copying groups from mirror user: $MirrorUser"
-
-    try {
-        $mirror = Get-ADUser -Identity $MirrorUser -Properties MemberOf, DisplayName @adCommon
-    }
-    catch {
-        throw @"
-Could not find the mirror user '$MirrorUser'.
-
-Use their logon name (sAMAccountName), not their display name or email
-address. For example 'jdoe', not 'John Doe' and not 'jdoe@$($config.Domain)'.
-
-Active Directory reported: $($_.Exception.Message)
-"@
-    }
-
-    $mirrorLabel = if ($mirror.DisplayName) { "$($mirror.DisplayName) ($MirrorUser)" } else { $MirrorUser }
-    Write-Detail "Found: $mirrorLabel"
 
     foreach ($groupDn in $mirror.MemberOf) {
         $targetGroups.Add((Get-ADGroup -Identity $groupDn -Properties objectSid @adCommon))
@@ -360,7 +427,8 @@ $summary = [ordered]@{
     Alias         = $alias
     EmailAddress  = $upn
     LogonName     = $sam
-    OrganizationalUnit = $ou
+    OrganizationalUnit       = $ou
+    OrganizationalUnitReason = $ouReason
     TempPassword  = $null
     MirrorUser    = if ($MirrorUser) { $MirrorUser } else { '(none - used DefaultGroups)' }
     GroupsAdded   = @()
@@ -541,6 +609,7 @@ Write-Host " Name          : $displayName"
 Write-Host " Email address : $upn"
 Write-Host " Logon name    : $sam"
 Write-Host " Location      : $ou"
+Write-Host "                 ($ouReason)" -ForegroundColor DarkGray
 Write-Host " Groups from   : $($summary.MirrorUser)"
 
 if ($accountCreated) {

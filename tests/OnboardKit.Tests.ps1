@@ -332,6 +332,8 @@ Describe 'Import-OnboardKitConfig' {
         $config.DefaultGroups          | Should -BeNullOrEmpty
         $config.AdSyncServer           | Should -Be ''
         $config.TempPasswordLength     | Should -Be 16
+        $config.MirrorTargetOU         | Should -BeTrue
+        $config.ProtectedOUs           | Should -BeNullOrEmpty
         $config.Licensing.GroupNames   | Should -BeNullOrEmpty
         $config.Graph.AuthMode         | Should -Be 'Delegated'
         $config.Graph.ClientId         | Should -Be ''
@@ -367,6 +369,111 @@ Describe 'Import-OnboardKitConfig' {
 
         { Import-OnboardKitConfig -ConfigPath $path } |
             Should -Throw -ExpectedMessage '*could not be read*'
+    }
+}
+
+
+Describe 'Get-OnboardParentOU' {
+
+    It 'returns the OU containing an ordinary user' {
+        Get-OnboardParentOU -DistinguishedName 'CN=Jane Doe,OU=Standard users,OU=Company,DC=example,DC=com' |
+            Should -Be 'OU=Standard users,OU=Company,DC=example,DC=com'
+    }
+
+    # A user genuinely named "Smith, John" has an escaped comma in their DN.
+    # Splitting on every comma would return 'John,OU=...' and place the new
+    # hire somewhere that does not exist.
+    It 'is not fooled by an escaped comma in the name' {
+        Get-OnboardParentOU -DistinguishedName 'CN=Smith\, John,OU=USB-Restrict,OU=Company,DC=example,DC=com' |
+            Should -Be 'OU=USB-Restrict,OU=Company,DC=example,DC=com'
+    }
+
+    It 'is not fooled by an equals sign in the name' {
+        Get-OnboardParentOU -DistinguishedName 'CN=Weird=Name,OU=Admin,DC=example,DC=com' |
+            Should -Be 'OU=Admin,DC=example,DC=com'
+    }
+
+    It 'handles a deeply nested OU' {
+        Get-OnboardParentOU -DistinguishedName 'CN=Svc,OU=AdditionalRestrictions,OU=USB-Restrict,OU=Company,DC=example,DC=com' |
+            Should -Be 'OU=AdditionalRestrictions,OU=USB-Restrict,OU=Company,DC=example,DC=com'
+    }
+
+    It 'handles an object in a container rather than an OU' {
+        Get-OnboardParentOU -DistinguishedName 'CN=Administrator,CN=Users,DC=example,DC=com' |
+            Should -Be 'CN=Users,DC=example,DC=com'
+    }
+
+    It 'throws on something that is not a distinguished name' {
+        { Get-OnboardParentOU -DistinguishedName 'CN=NoComma' } |
+            Should -Throw -ExpectedMessage '*does not look like a distinguished name*'
+    }
+
+    It 'rejects an empty distinguished name' {
+        { Get-OnboardParentOU -DistinguishedName '' } | Should -Throw
+    }
+}
+
+
+Describe 'Test-OnboardProtectedOU' {
+
+    BeforeAll {
+        $script:Protected = @(
+            'OU=Admin,OU=Company,DC=example,DC=com'
+            'OU=USB-Restrict,OU=Company,DC=example,DC=com'
+        )
+    }
+
+    It 'matches the protected OU exactly' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Admin,OU=Company,DC=example,DC=com' -ProtectedOUs $script:Protected |
+            Should -BeTrue
+    }
+
+    It 'matches an OU nested beneath a protected one' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=AdditionalRestrictions,OU=USB-Restrict,OU=Company,DC=example,DC=com' -ProtectedOUs $script:Protected |
+            Should -BeTrue
+    }
+
+    # The reason this compares whole DN components instead of doing a string
+    # match: -like or -match would treat 'Administration' as 'Admin' and
+    # protect an OU nobody asked to protect.
+    It 'does not treat OU=Administration as OU=Admin' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Administration,OU=Company,DC=example,DC=com' -ProtectedOUs $script:Protected |
+            Should -BeFalse
+    }
+
+    It 'ignores an unrelated OU' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Standard users,OU=Company,DC=example,DC=com' -ProtectedOUs $script:Protected |
+            Should -BeFalse
+    }
+
+    It 'ignores a same-named OU under a different parent' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Admin,OU=Elsewhere,DC=example,DC=com' -ProtectedOUs $script:Protected |
+            Should -BeFalse
+    }
+
+    It 'is case-insensitive' {
+        Test-OnboardProtectedOU -DistinguishedName 'ou=admin,ou=company,dc=example,dc=com' -ProtectedOUs $script:Protected |
+            Should -BeTrue
+    }
+
+    It 'tolerates spaces after the separators' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Admin, OU=Company, DC=example, DC=com' -ProtectedOUs $script:Protected |
+            Should -BeTrue
+    }
+
+    It 'protects nothing when the list is empty' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Admin,OU=Company,DC=example,DC=com' -ProtectedOUs @() |
+            Should -BeFalse
+    }
+
+    It 'protects nothing when the list is null' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Admin,OU=Company,DC=example,DC=com' -ProtectedOUs $null |
+            Should -BeFalse
+    }
+
+    It 'skips blank entries in the list rather than protecting everything' {
+        Test-OnboardProtectedOU -DistinguishedName 'OU=Standard users,OU=Company,DC=example,DC=com' -ProtectedOUs @('', '   ') |
+            Should -BeFalse
     }
 }
 
@@ -542,7 +649,8 @@ Describe 'config.example.psd1' {
         $example = Import-PowerShellDataFile -LiteralPath $path
 
         foreach ($key in @('Domain', 'AliasTemplate', 'DefaultTargetOU', 'DefaultGroups',
-                           'AdSyncServer', 'TempPasswordLength', 'Licensing', 'Graph')) {
+                           'AdSyncServer', 'TempPasswordLength', 'Licensing', 'Graph',
+                           'MirrorTargetOU', 'ProtectedOUs')) {
             $example.ContainsKey($key) | Should -BeTrue -Because "config.example.psd1 should document '$key'"
         }
     }

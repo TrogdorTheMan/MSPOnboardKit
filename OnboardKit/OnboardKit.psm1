@@ -125,6 +125,14 @@ See docs/SETUP.md section 6 for where to find each value.
     if (-not $config.ContainsKey('AdSyncServer') -or $null -eq $config['AdSyncServer']) {
         $config['AdSyncServer'] = ''
     }
+    # Defaults to on: "mirror this person" ought to mean placement as well as
+    # group membership, especially where OUs carry Group Policy.
+    if (-not $config.ContainsKey('MirrorTargetOU') -or $null -eq $config['MirrorTargetOU']) {
+        $config['MirrorTargetOU'] = $true
+    }
+    if (-not $config.ContainsKey('ProtectedOUs') -or $null -eq $config['ProtectedOUs']) {
+        $config['ProtectedOUs'] = @()
+    }
     if (-not $config.ContainsKey('TempPasswordLength') -or -not $config['TempPasswordLength']) {
         $config['TempPasswordLength'] = 16
     }
@@ -523,6 +531,167 @@ function New-OnboardTempPassword {
 }
 
 
+function Split-OnboardDnComponent {
+    <#
+    .SYNOPSIS
+        Splits a distinguished name into its components, respecting escaping.
+
+    .DESCRIPTION
+        A distinguished name is comma-separated, but a component may contain a
+        literal comma escaped with a backslash - a user actually named
+        "Smith, John" has the DN "CN=Smith\, John,OU=Staff,DC=example,DC=com".
+        Splitting that on every comma silently produces nonsense, so this walks
+        the string and only breaks on commas that are not escaped.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $DistinguishedName
+    )
+
+    $components = New-Object System.Collections.Generic.List[string]
+    $current    = New-Object System.Text.StringBuilder
+    $escaped    = $false
+
+    foreach ($char in $DistinguishedName.ToCharArray()) {
+
+        if ($escaped) {
+            [void]$current.Append($char)
+            $escaped = $false
+            continue
+        }
+
+        if ($char -eq '\') {
+            [void]$current.Append($char)
+            $escaped = $true
+            continue
+        }
+
+        if ($char -eq ',') {
+            $components.Add($current.ToString())
+            [void]$current.Clear()
+            continue
+        }
+
+        [void]$current.Append($char)
+    }
+
+    $components.Add($current.ToString())
+
+    return ,$components.ToArray()
+}
+
+
+function Get-OnboardParentOU {
+    <#
+    .SYNOPSIS
+        Returns the container a directory object sits in.
+
+    .DESCRIPTION
+        Takes an object's distinguished name and strips the leading component,
+        leaving the distinguished name of whatever contains it. Used to work
+        out which OU a mirror user lives in, so a new hire can be created
+        alongside them.
+
+    .EXAMPLE
+        Get-OnboardParentOU -DistinguishedName 'CN=Jane Doe,OU=Standard users,DC=example,DC=com'
+        OU=Standard users,DC=example,DC=com
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $DistinguishedName
+    )
+
+    $components = Split-OnboardDnComponent -DistinguishedName $DistinguishedName
+
+    if ($components.Count -lt 2) {
+        throw "'$DistinguishedName' does not look like a distinguished name, so the containing OU cannot be worked out from it. A distinguished name looks like 'CN=Jane Doe,OU=Staff,DC=example,DC=com'."
+    }
+
+    return ($components[1..($components.Count - 1)] -join ',')
+}
+
+
+function Test-OnboardProtectedOU {
+    <#
+    .SYNOPSIS
+        Returns $true if a distinguished name sits in, or beneath, a protected OU.
+
+    .DESCRIPTION
+        Compares whole distinguished-name components rather than doing a string
+        match, so 'OU=Admin,...' does not match 'OU=Administration,...' - which
+        a -like or -match comparison would, and which would protect the wrong
+        thing without anyone noticing.
+
+        Because it compares a suffix of components, listing a parent OU also
+        covers everything beneath it.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $DistinguishedName,
+
+        [Parameter()]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [string[]] $ProtectedOUs
+    )
+
+    if (-not $ProtectedOUs) {
+        return $false
+    }
+
+    $normalise = {
+        param([string] $Dn)
+        @(Split-OnboardDnComponent -DistinguishedName $Dn |
+            ForEach-Object { $_.Trim().ToLowerInvariant() } |
+            Where-Object { $_ })
+    }
+
+    $target = & $normalise $DistinguishedName
+
+    foreach ($protectedOu in $ProtectedOUs) {
+
+        if ([string]::IsNullOrWhiteSpace($protectedOu)) {
+            continue
+        }
+
+        $protected = & $normalise $protectedOu
+
+        if ($protected.Count -eq 0 -or $protected.Count -gt $target.Count) {
+            continue
+        }
+
+        # The protected OU must be a suffix of the target's components: that
+        # covers both "is exactly this OU" and "is somewhere beneath it".
+        # Not named $matches: that is an automatic variable PowerShell fills in
+        # from -match, and writing to it has side effects.
+        $offset  = $target.Count - $protected.Count
+        $isMatch = $true
+
+        for ($i = 0; $i -lt $protected.Count; $i++) {
+            if ($target[$offset + $i] -ne $protected[$i]) {
+                $isMatch = $false
+                break
+            }
+        }
+
+        if ($isMatch) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+
 function Get-OnboardObjectProperty {
     <#
     .SYNOPSIS
@@ -738,4 +907,6 @@ Export-ModuleMember -Function @(
     'Get-UniqueOnboardAlias'
     'New-OnboardTempPassword'
     'Test-OnboardLicensingGroup'
+    'Get-OnboardParentOU'
+    'Test-OnboardProtectedOU'
 )

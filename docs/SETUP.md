@@ -317,6 +317,8 @@ notepad .\config.psd1
 | `AliasTemplate` | Your email naming pattern | See the table below |
 | `DefaultTargetOU` | Where new accounts get created | See "Finding your OU" below — you must copy this exactly |
 | `DefaultGroups` | Baseline groups for new hires | The groups everyone gets. Only used when you do not name a mirror user |
+| `MirrorTargetOU` | `$true` or `$false` | Leave `$true` so a new hire is created in the same OU as the mirror user. See ["Why placement matters"](#why-placement-matters) below |
+| `ProtectedOUs` | OUs never used automatically | Your admin, service-account and equipment OUs. Copy their distinguished names the same way as `DefaultTargetOU` |
 | `AdSyncServer` | Your Entra Connect server | Leave empty if you run the script on that server. Not sure? Leave it empty — the setup check will tell you |
 | `TempPasswordLength` | How long the temporary password is | Leave at `16` unless you have a policy that says otherwise |
 | `Licensing.GroupNames` | Your license groups | The group names from [section 5](#5-one-time-microsoft-365-setup) |
@@ -364,6 +366,28 @@ result:
 ```powershell
 Get-ADOrganizationalUnit -Filter "Name -like '*Users*'" | Select-Object Name, DistinguishedName
 ```
+
+### Why placement matters
+
+In many organisations an OU is just a folder, and it makes little difference which one an
+account sits in. In others, **the OU is the configuration** — Group Policy gets attached to it,
+so an account in `USB-Restrict` genuinely behaves differently from one in `Standard users`.
+
+That is why, when you name a mirror user, the new hire is created **in the same OU as that
+person** rather than in `DefaultTargetOU`. "Make them like Jane" has to mean placement as well
+as groups: copying Jane's groups while leaving the new starter somewhere else would hand them
+Jane's access *without* Jane's restrictions, and nothing would look wrong.
+
+Two escape hatches:
+
+- **`-TargetOU`** on the command line always wins, whatever anything else says.
+- **`ProtectedOUs`** lists OUs that must never be chosen automatically. If someone asks you to
+  "copy Dave's access" and Dave is a domain administrator, without this the new starter lands
+  in the Admin OU and inherits administrator policy. With it, the script stops and makes you
+  say what you actually meant.
+
+Fill `ProtectedOUs` in with your admin OU, any service-account OU, and anything holding
+equipment rather than people.
 
 ### Finding your tenant ID
 
@@ -614,6 +638,48 @@ Use the person's **username**, not their display name. `jdoe`, not `John Doe`, a
 ```powershell
 Get-ADUser -Filter "Name -like '*Doe*'" | Select-Object Name, SamAccountName
 ```
+
+### "The mirror user is in an OU that is marked as protected"
+
+You asked to copy someone who lives in an OU listed in `ProtectedOUs` — usually an administrator
+or a service account. The script will not put a new starter there automatically, because they
+would silently inherit that OU's Group Policy.
+
+Decide what you actually want:
+
+- **They should be an ordinary user** — pick a different mirror user, one who does the job this
+  new person will be doing. This is almost always the right answer.
+- **They really do belong there** — say so explicitly with `-TargetOU`, and the script will
+  proceed.
+
+### "...is not registered as a sign-in (UPN) suffix in this forest"
+
+Accounts cannot be created with a sign-in name ending in your email domain until that domain is
+added as a UPN suffix. A domain administrator adds it in **Active Directory Domains and
+Trusts** → right-click the root → **Properties** → **UPN Suffixes** → **Add**.
+
+### "Existing staff sign in with more than one suffix"
+
+Not an error, and nothing to fix in the toolkit — a heads-up that your existing accounts are
+not consistent with each other.
+
+This is very common in domains that have been running for many years under several different
+administrators. Some accounts end up signing in on the internal Active Directory name
+(something like `company2000.lan`) and others on the public domain, with no pattern to it.
+
+Because there is no single existing convention, there is nothing to copy. New accounts are
+created using the `Domain` from your config, which is the right choice as long as it is a real,
+routable domain — an internal-only name such as `.lan` or `.local` **cannot** be used to sign
+in to Microsoft 365, so never set `Domain` to one just because existing accounts use it.
+
+Worth asking whoever manages Entra Connect which attribute it uses as the sign-in name, since
+the accounts on the internal suffix must be getting a working one from somewhere.
+
+### "Existing staff use @something-else"
+
+This one is about email, not sign-in, and is worth a closer look. It means the `Domain` in your
+config is not the domain your existing staff actually receive email on — so new hires would get
+addresses on a different domain from everyone else. Check the `Domain` setting.
 
 ### "The target OU does not exist"
 

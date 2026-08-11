@@ -286,6 +286,116 @@ else {
                 -Fix "This must be the OU's exact distinguished name. See docs/SETUP.md section 6 for how to copy it out of Active Directory Users and Computers."
         }
 
+        foreach ($protectedOu in $config.ProtectedOUs) {
+            try {
+                $null = Get-ADOrganizationalUnit -Identity $protectedOu -ErrorAction Stop
+                Add-Result -Check "ProtectedOU '$protectedOu'" -Status 'Pass' -Message 'Exists.'
+            }
+            catch {
+                # A typo here protects nothing while looking like it does,
+                # which is the worst way for a guard to fail.
+                Add-Result -Check "ProtectedOU '$protectedOu'" -Status 'Fail' `
+                    -Message 'This OU does not exist, so nothing is actually being protected by this entry.' `
+                    -Fix "Correct the entry in ProtectedOUs in your config file, or remove it. It must be the OU's exact distinguished name."
+            }
+        }
+
+        # Is the email domain usable as a sign-in suffix at all?
+        try {
+            $adForest = Get-ADForest -ErrorAction Stop
+
+            $validSuffixes = @($adForest.UPNSuffixes) + @($adDomain.DNSRoot) + @($adForest.RootDomain) |
+                Where-Object { $_ } |
+                ForEach-Object { $_.ToLowerInvariant() }
+
+            if ($config.Domain.ToLowerInvariant() -in $validSuffixes) {
+                Add-Result -Check 'UPN suffix' -Status 'Pass' -Message "'$($config.Domain)' is available as a sign-in suffix."
+            }
+            else {
+                Add-Result -Check 'UPN suffix' -Status 'Fail' `
+                    -Message "'$($config.Domain)' is not registered as a sign-in (UPN) suffix in this forest." `
+                    -Fix @"
+Accounts cannot be created with a sign-in name ending in @$($config.Domain)
+until it is registered.
+
+A domain administrator adds it in:
+    Active Directory Domains and Trusts  >  right-click the root  >
+    Properties  >  UPN Suffixes  >  Add
+
+Suffixes currently available: $($validSuffixes -join ', ')
+"@
+            }
+        }
+        catch {
+            Add-Result -Check 'UPN suffix' -Status 'Warn' `
+                -Message 'Could not read the forest configuration to check this.' -Fix $_.Exception.Message
+        }
+
+        # Compared against the mail attribute, not the sign-in name. Domain in
+        # the config drives the email address as well as the sign-in name, so
+        # "what domain is their email on" is the question that matters. Sign-in
+        # names are reported separately and never used as a recommendation:
+        # they are frequently inconsistent in long-lived domains, and the
+        # majority answer there can easily be an internal name that would be
+        # actively wrong to put in an email address.
+        try {
+            $sampleUsers = @(
+                Get-ADUser -SearchBase $config.DefaultTargetOU -Filter 'Enabled -eq $true' `
+                    -Properties UserPrincipalName, mail -ResultSetSize 200 -ErrorAction Stop |
+                    Where-Object { $_.mail }
+            )
+
+            if ($sampleUsers.Count -eq 0) {
+                Add-Result -Check 'Existing email domain' -Status 'Skip' `
+                    -Message 'No existing enabled users with an email address in the target OU to compare against.'
+            }
+            else {
+                $mailDomains = $sampleUsers |
+                    ForEach-Object { ($_.mail -split '@')[-1].ToLowerInvariant() } |
+                    Group-Object | Sort-Object Count -Descending
+
+                $mailSummary = ($mailDomains | ForEach-Object { "@$($_.Name) x$($_.Count)" }) -join ', '
+
+                if ($mailDomains[0].Name -eq $config.Domain.ToLowerInvariant()) {
+                    Add-Result -Check 'Existing email domain' -Status 'Pass' `
+                        -Message "Existing staff use @$($mailDomains[0].Name), matching your config ($mailSummary)."
+                }
+                else {
+                    Add-Result -Check 'Existing email domain' -Status 'Warn' `
+                        -Message "Existing staff use @$($mailDomains[0].Name), but new hires would get @$($config.Domain)." `
+                        -Fix "Found in the target OU: $mailSummary`nCheck the Domain setting in your config file is the domain your staff actually receive email on."
+                }
+
+                # Informational only.
+                $upnSuffixes = $sampleUsers |
+                    Where-Object { $_.UserPrincipalName } |
+                    ForEach-Object { ($_.UserPrincipalName -split '@')[-1].ToLowerInvariant() } |
+                    Group-Object | Sort-Object Count -Descending
+
+                if ($upnSuffixes.Count -gt 1) {
+                    $upnSummary = ($upnSuffixes | ForEach-Object { "@$($_.Name) x$($_.Count)" }) -join ', '
+                    Add-Result -Check 'Existing sign-in names' -Status 'Warn' `
+                        -Message "Existing staff sign in with more than one suffix: $upnSummary" `
+                        -Fix @"
+There is no single existing convention here to copy, which is common in domains
+that have been running for a long time under several administrators.
+
+New accounts will be created as @$($config.Domain), which is the right choice
+as long as that is a real, routable domain - an internal-only name such as
+.lan or .local cannot be used to sign in to Microsoft 365.
+
+Nothing to fix in this toolkit. Worth asking whoever manages Entra Connect
+which attribute it uses as the sign-in name, since existing users on the other
+suffix must be getting it from somewhere.
+"@
+                }
+            }
+        }
+        catch {
+            Add-Result -Check 'Existing email domain' -Status 'Skip' `
+                -Message "Could not sample existing users: $($_.Exception.Message)"
+        }
+
         foreach ($groupName in $config.DefaultGroups) {
             try {
                 $null = Get-ADGroup -Identity $groupName -ErrorAction Stop
