@@ -2,7 +2,7 @@
 
 This guide is written for someone who has **never set up a PowerShell tool before**. It does
 not assume you know what Active Directory, Entra ID, or an OU is — those are explained in the
-[Glossary](#12-glossary) at the bottom.
+[Glossary](#13-glossary) at the bottom.
 
 Work through the sections in order. Do not skip ahead.
 
@@ -24,7 +24,8 @@ Work through the sections in order. Do not skip ahead.
 9. [Creating a real account](#9-creating-a-real-account)
 10. [Assigning the Microsoft 365 license](#10-assigning-the-microsoft-365-license)
 11. [Troubleshooting](#11-troubleshooting)
-12. [Glossary](#12-glossary)
+12. [Sharing this with other admins](#12-sharing-this-with-other-admins)
+13. [Glossary](#13-glossary)
 
 ---
 
@@ -908,7 +909,95 @@ Directory Users and Computers and start again.
 
 ---
 
-## 12. Glossary
+## 12. Sharing this with other admins
+
+Once you have the toolkit working, you will probably want to give it to other people who
+onboard staff. Hand over a package, not the repository — nobody else needs the git history,
+the tests, or the placeholder config.
+
+> **Before you share anything:** your `config.psd1` contains no passwords. Client secrets are
+> referenced by environment variable *name* only, and certificates by thumbprint, so there is
+> nothing in it that can be used to sign in. What it *does* describe is your internal layout —
+> your domain, your tenant ID, your OU distinguished names, and in `ProtectedOUs` a labelled
+> list of exactly where your administrator and service accounts live. That is useful to an
+> attacker. **Keep any package containing it inside your organisation.** Never send it to a
+> client, and do not put it anywhere public.
+
+### Option A — a shared folder (recommended)
+
+If everyone who needs it is on your network, put one copy on a file share and have people run
+it from there:
+
+```
+\\yourserver\IT\OnboardKit\
+```
+
+This is worth preferring over emailing zips around. There is one copy of `config.psd1`, so
+when an OU moves or a license group is renamed you fix it once instead of chasing down five
+stale copies. Restrict the folder's permissions to the admins who should have it.
+
+Recipients still need their own prerequisites — the RSAT tools and the Microsoft 365 modules
+are installed per machine, not carried in the folder. Have each person run
+`Test-OnboardKitSetup.ps1` from the share on their own machine before their first real use.
+
+### Option B — build a zip
+
+For laptops that are not always on the network, or when you want to hand someone a
+self-contained copy, build a package:
+
+```powershell
+.\Build-OnboardKitPackage.ps1 -IncludeConfig
+```
+
+That produces `dist\MSPOnboardKit-<version>.zip` containing the three scripts, the `OnboardKit`
+module, the docs, and your filled-in `config.psd1`. The version number comes from the module
+manifest, so you can tell which build someone is running.
+
+Leave off `-IncludeConfig` and you get the same package with `config.example.psd1` instead —
+useful when the recipient is at a different organisation and needs to configure their own.
+
+The script deliberately excludes `.git`, `tests`, `.gitignore`, and editor folders.
+
+### Unblocking the files — do not skip this
+
+Windows tags files that arrive from the internet, email, or Teams. PowerShell then refuses to
+run them, usually with a "not digitally signed" error that makes it look like the toolkit is
+broken when it is not.
+
+**After extracting the zip, before running anything**, have the recipient open PowerShell in
+the extracted folder and run:
+
+```powershell
+Get-ChildItem -Path . -Recurse | Unblock-File
+```
+
+Copying from a shared folder on your own network does not have this problem, which is another
+reason to prefer Option A.
+
+### What the recipient does next
+
+1. Extract the zip somewhere sensible, such as `C:\Tools\OnboardKit`
+2. Unblock the files as above
+3. Work through [section 3](#3-install-the-prerequisites) to install the prerequisites on
+   their machine
+4. Run `.\Test-OnboardKitSetup.ps1` and fix anything it reports
+5. Do a dry run following [section 8](#8-your-first-run--a-safe-dry-run) before creating a
+   real account
+
+They also need the same Active Directory and Microsoft 365 permissions you do. Sharing the
+scripts does not share your access — see
+[section 2](#2-permissions-you-need-before-you-start) for what to request.
+
+### Keeping copies in step
+
+Whichever option you use, when you change `config.psd1` or update the scripts, the copies
+other people hold do not update themselves. With a shared folder there is nothing to do. With
+zips, rebuild and redistribute, and tell people to replace the whole folder rather than
+copying individual files over an older version.
+
+---
+
+## 13. Glossary
 
 **Active Directory (AD)** — the system that stores user accounts on your local network. It is
 what people log into their computers with.

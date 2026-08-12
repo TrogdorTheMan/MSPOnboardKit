@@ -18,6 +18,10 @@ config.*.psd1
 logs/
 *.log
 
+# Built distribution packages - may contain a real config.psd1
+dist/
+MSPOnboardKit-*.zip
+
 # Editor / OS noise
 .vscode/
 .idea/
