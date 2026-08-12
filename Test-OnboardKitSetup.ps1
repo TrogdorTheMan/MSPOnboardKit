@@ -160,10 +160,15 @@ else {
     Add-Result -Check 'ActiveDirectory module' -Status 'Fail' `
         -Message 'Not installed. New-OnboardUser.ps1 cannot run without it.' `
         -Fix @"
-On Windows 10/11, run in an ELEVATED PowerShell window:
+On Windows 10/11, run in an ELEVATED WINDOWS POWERSHELL 5.1 window:
     Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+PowerShell 7 fails this with "Class not registered". From any shell use:
+    DISM.exe /Online /Add-Capability /CapabilityName:Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+A reboot may be needed before the module loads. Check state with:
+    Get-WindowsCapability -Online -Name 'Rsat.ActiveDirectory*' | Select-Object Name, State
 On a server:
     Install-WindowsFeature RSAT-AD-PowerShell
+See docs/SETUP.md section 3.2.
 "@
 }
 

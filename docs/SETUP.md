@@ -133,16 +133,48 @@ This is what lets PowerShell talk to Active Directory.
 
 **On Windows 10 or 11:**
 
-Right-click the Start button, choose **Terminal (Admin)** or **Windows PowerShell (Admin)**,
-then run:
+> **Run this step in Windows PowerShell 5.1, not PowerShell 7.** The `DISM` module that
+> backs this command has no native PowerShell 7 build. From PowerShell 7 it loads through a
+> compatibility shim and fails with `Add-WindowsCapability: Class not registered`. The
+> command itself is fine — only the shell is wrong. Note that step 3.3 below has you install
+> PowerShell 7, and the VS Code PowerShell terminal usually defaults to it, so it is easy to
+> end up in the wrong shell here.
+
+Right-click the Start button and choose **Terminal (Admin)**. If the tab that opens says
+`PowerShell 7`, open a **Windows PowerShell** tab from the `∨` dropdown next to the `+`.
+Confirm you are in the right place, then install:
 
 ```powershell
+$PSVersionTable.PSVersion   # Major must be 5
+
 Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
 ```
 
-If you prefer clicking: **Settings → System → Optional features → Add an optional feature**,
-search for `RSAT: Active Directory`, and install
+The four `~` characters are not a typo. Capability names are five `~`-separated fields —
+`Name~PublicKeyToken~Architecture~Language~Version` — and RSAT leaves the middle three
+blank. Removing them breaks the name. To avoid typing it, look it up instead:
+
+```powershell
+$cap = (Get-WindowsCapability -Online -Name 'Rsat.ActiveDirectory*').Name
+Add-WindowsCapability -Online -Name $cap
+```
+
+**If you cannot get out of PowerShell 7**, call DISM directly. It is a normal executable,
+so it works from any shell (still elevated):
+
+```powershell
+DISM.exe /Online /Add-Capability /CapabilityName:Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+```
+
+If you prefer clicking: **Settings → System → Optional features**, click **View features**
+next to *Add an optional feature*, search for `RSAT: Active Directory`, and install
 *RSAT: Active Directory Domain Services and Lightweight Directory Services Tools*.
+
+> Do **not** use the **More Windows features** link lower down that same Settings page. It
+> opens the old "Turn Windows features on or off" dialog, which lists Windows *features*
+> only — RSAT tools are *capabilities* and never appear there. The similarly named
+> **Active Directory Lightweight Directory Services** entry in that dialog is a different
+> thing entirely (a server role) and will not give you the `ActiveDirectory` module.
 
 **On a Windows Server:**
 
@@ -150,13 +182,28 @@ search for `RSAT: Active Directory`, and install
 Install-WindowsFeature RSAT-AD-PowerShell
 ```
 
-**Check it worked** — close and reopen PowerShell, then run:
+**Check it worked.** If the install printed `RestartNeeded : True`, or if this returns
+`InstallPending`, you must **reboot** before the module becomes usable — reopening
+PowerShell is not enough:
+
+```powershell
+Get-WindowsCapability -Online -Name 'Rsat.ActiveDirectory*' | Select-Object Name, State
+```
+
+`Installed` means you are done. After any required reboot, confirm the module is there:
 
 ```powershell
 Get-Module -ListAvailable ActiveDirectory
 ```
 
-You should see a line mentioning `ActiveDirectory`. If you see nothing, it did not install.
+You should see a line mentioning `ActiveDirectory`. If you see nothing *and* the capability
+state above is `Installed`, reboot and check again before assuming it failed.
+
+**Still failing?** If the command errors in Windows PowerShell 5.1 too, the payload is being
+blocked rather than misrouted — RSAT downloads from Windows Update on demand. On a
+WSUS-managed machine, ask whoever runs it to enable *Computer Configuration → Administrative
+Templates → System → Specify settings for optional component installation and component
+repair* with "Download repair content ... directly from Windows Update" checked.
 
 ### 3.3 Install PowerShell 7
 
@@ -270,22 +317,60 @@ automatically receives it.
 
 ### Attach the license to the group
 
-1. Still in <https://entra.microsoft.com>, go to **Billing → Licenses → All products**
-2. Tick the license you want (for example *Microsoft 365 E3*)
-3. Click **Assign**
-4. Under **Users and groups**, pick the group you just created
-5. Review the service plans, then click **Assign**
+Licence assignment lives in the **Microsoft 365 admin center**, not in Entra — Entra will send
+you there.
+
+1. In <https://entra.microsoft.com>, go to **Billing → Licenses → All products**
+2. Click the **Go to M365 admin center** link. You will land on the Licenses page at
+   `admin.microsoft.com` (it may show as `admin.cloud.microsoft`)
+3. Click the licence you want to hand out — see the warning below about picking the right one
+4. Click **Assign licenses**
+5. Choose the group you created, review the service plans, and confirm
+
+> #### ⚠️ Make sure it is the licence that actually gives them a mailbox
+>
+> Product names are dangerously similar, and picking the wrong one produces an account that
+> looks licensed but has no email.
+>
+> - **Enterprise Mobility + Security E3** is identity and device management only — Entra ID P1,
+>   Intune, Information Protection. It contains **no Exchange, no Office apps, no Teams**.
+> - **Office 365 E3** and **Microsoft 365 E3** *do* include Exchange Online.
+>
+> Many organisations own **Office 365 E3 *and* Enterprise Mobility + Security E3** as two
+> separate products rather than a single Microsoft 365 E3. If that is you, **attach both to the
+> same group** — a group can carry several licences, and everyone added to it receives all of
+> them. You do not need a group per licence.
+>
+> To see exactly what you own, run:
+>
+> ```powershell
+> Connect-MgGraph -Scopes Organization.Read.All
+> Get-MgSubscribedSku | Select-Object SkuPartNumber,
+>     @{n='Total';e={$_.PrepaidUnits.Enabled}},
+>     @{n='Used'; e={$_.ConsumedUnits}},
+>     @{n='Free'; e={$_.PrepaidUnits.Enabled - $_.ConsumedUnits}} |
+>     Sort-Object SkuPartNumber | Format-Table -AutoSize
+> ```
+>
+> `ENTERPRISEPACK` is Office 365 E3, `SPE_E3` is Microsoft 365 E3, and `EMS` is Enterprise
+> Mobility + Security E3.
 
 ### Check it worked
 
-Go back to **Groups**, open your group, and choose **Licenses** in the left menu. You should
-see the license listed.
+Go back to **Groups** in Entra, open your group, and choose **Licenses** in the left menu. Every
+licence you attached should be listed.
 
-Repeat for each different license type you hand out (for example a separate group for
-E3 + Security).
+> **The count may look wrong for a minute.** Licence changes are processed in the background,
+> and the totals can read high while that happens — the page even warns you to refresh. Give it
+> a moment and refresh before believing a number. Attaching a licence to an **empty** group
+> should consume **no** seats at all.
 
-**Write down the exact group names.** You will type them into your config file in the next
-section, and they must match *exactly*, including capitalisation.
+**Check you have a spare seat.** Each member of the group consumes one licence. If the product
+shows `0` available, the next person added gets a licence *error* instead of a licence, and
+their mailbox will not work. Buy or reclaim a seat before onboarding anyone.
+
+**Write down the exact group name.** You will type it into your config file in the next section.
+Spelling must match; capitalisation does not.
 
 ---
 
@@ -766,6 +851,25 @@ all, and can skip it.
 
 Microsoft 365 only allows members to be added to **security groups** and **Microsoft 365
 groups**. Create a Security group in Entra ID and attach the license to that one instead.
+
+### The new hire got an account but no mailbox
+
+The licensing group is probably carrying the wrong product. **Enterprise Mobility + Security
+E3** looks like a full licence but contains no Exchange Online, so the account exists and is
+"licensed" without ever getting a mailbox.
+
+Check what is actually attached to the group — Entra → **Groups** → your group → **Licenses** —
+and make sure something that includes Exchange is there: **Office 365 E3** or **Microsoft 365
+E3**. See [section 5](#5-one-time-microsoft-365-setup).
+
+### The new hire is in the group but shows a licence error
+
+You have run out of seats. Each group member consumes one licence, and if none are free the
+assignment fails with a count violation rather than succeeding quietly.
+
+Look at the product's **Errors & Issues** tab in the Microsoft 365 admin center. Free up a seat
+or buy another, and the licence is applied automatically — you do not need to re-add the person
+to the group.
 
 ### "...does not appear to have any licences attached"
 

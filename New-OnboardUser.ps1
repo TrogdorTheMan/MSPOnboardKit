@@ -163,13 +163,21 @@ The ActiveDirectory PowerShell module is not installed on this machine.
 
 This script cannot create accounts without it.
 
-To install it on Windows 10/11:
-    Settings > System > Optional features > Add an optional feature
+To install it on Windows 10/11, open an elevated WINDOWS POWERSHELL 5.1 window
+(not PowerShell 7 - the command fails there with "Class not registered") and run:
+    Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+
+From any shell, including PowerShell 7, this works instead (still elevated):
+    DISM.exe /Online /Add-Capability /CapabilityName:Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+
+Or via the GUI:
+    Settings > System > Optional features > View features
     then search for and install "RSAT: Active Directory Domain Services and
     Lightweight Directory Services Tools"
+    (not the "More Windows features" link - RSAT is not listed there)
 
-Or run this in an elevated PowerShell window:
-    Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0
+A reboot may be required before the module appears. Check with:
+    Get-WindowsCapability -Online -Name 'Rsat.ActiveDirectory*' | Select-Object Name, State
 
 On a server, run:
     Install-WindowsFeature RSAT-AD-PowerShell
