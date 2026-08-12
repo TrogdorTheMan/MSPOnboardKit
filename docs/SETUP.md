@@ -410,6 +410,27 @@ notepad .\config.psd1
 | `Licensing.GroupNames` | Your license groups | The group names from [section 5](#5-one-time-microsoft-365-setup) |
 | `Graph.AuthMode` | How to sign in to Microsoft 365 | Leave as `'Delegated'` — that means "ask me to log in" |
 | `Graph.TenantId` | Your Microsoft 365 tenant ID | See "Finding your tenant ID" below |
+| `Graph.ClientId` | Leave empty | Only used when `AuthMode` is `'AppRegistration'` — see below |
+| `Graph.CertificateThumbprint` | Leave empty | Only used when `AuthMode` is `'AppRegistration'` — see below |
+| `Graph.ClientSecretEnvVar` | Leave empty | Only used when `AuthMode` is `'AppRegistration'` — see below |
+
+### A note on `AppRegistration` mode
+
+The last three settings above are blank for normal use, and this guide assumes you leave them
+that way.
+
+They exist for running the licensing step **unattended** — from a scheduled task or an
+automation server, where nobody is present to sign in. That needs a tenant administrator to
+create an app registration first, grant it Microsoft Graph application permissions, and
+consent to them on your behalf.
+
+You do not need any of that to onboard staff by hand. `'Delegated'` opens a sign-in window and
+uses your own account, which is simpler, involves no credentials to store or rotate, and means
+the toolkit can never do anything you could not do yourself.
+
+If you do need unattended mode later, `config.example.psd1` documents each of the three
+settings inline, including the rule that `ClientSecretEnvVar` holds the *name* of an
+environment variable rather than the secret itself.
 
 ### Choosing your alias template
 
@@ -939,6 +960,17 @@ stale copies. Restrict the folder's permissions to the admins who should have it
 Recipients still need their own prerequisites — the RSAT tools and the Microsoft 365 modules
 are installed per machine, not carried in the folder. Have each person run
 `Test-OnboardKitSetup.ps1` from the share on their own machine before their first real use.
+
+**If scripts refuse to run from the share**, the path is probably landing in the wrong security
+zone. Windows treats `\\fileserver\IT\OnboardKit` — a short server name — as Local Intranet,
+but `\\fileserver.contoso.com\IT\OnboardKit` or `\\10.0.0.5\IT\OnboardKit` as Internet, and
+`RemoteSigned` blocks Internet-zone scripts. The error says the file "is not digitally signed",
+which points nowhere near the real cause.
+
+`Unblock-File` does **not** fix this one — unlike the zip case below, there is no tag on the
+file to clear; the zone comes from the path itself. Either map the share using the short server
+name, or have whoever manages Group Policy add the server to Local Intranet via the
+*Site to Zone Assignment List* policy.
 
 ### Option B — build a zip
 
