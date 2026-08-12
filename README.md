@@ -32,6 +32,7 @@ is about to do, and when something is wrong it says which thing and how to fix i
 | **Step 1** | `New-OnboardUser.ps1` | AD account, email alias with collision handling, `proxyAddresses`, group **and OU** mirroring, directory sync |
 | **Step 2** | `Add-OnboardUserLicense.ps1` | Microsoft 365 license, via Entra ID group-based licensing |
 | **Check** | `Test-OnboardKitSetup.ps1` | Read-only preflight that validates your whole setup |
+| **Share** | `Build-OnboardKitPackage.ps1` | Builds a versioned zip to hand to another admin |
 
 Two steps, because a new account has to finish syncing from Active Directory up to Entra ID
 before it can be licensed.
@@ -64,6 +65,13 @@ attached — and explains which of those is wrong.
 - **PowerShell 7 recommended** and the `Microsoft.Graph` modules — for step 2
 - Entra ID licensing group(s) that already carry the license SKUs (a one-time admin task)
 
+> **Installing RSAT must be done from Windows PowerShell 5.1, not PowerShell 7.** The `DISM`
+> module has no native PowerShell 7 build, so `Add-WindowsCapability` fails there with
+> `Class not registered` — an error that says nothing about the real cause. Since step 2
+> above recommends PowerShell 7, it is easy to be in the wrong shell for this one command.
+> [SETUP.md section 3.2](docs/SETUP.md#32-install-the-active-directory-tools-rsat) has the
+> working command and a `DISM.exe` fallback that runs from any shell.
+
 ## Quick start
 
 ```powershell
@@ -86,6 +94,31 @@ notepad .\config.psd1
 
 `-MirrorUser` is optional. Leave it out and the new hire gets the `DefaultGroups` from your
 config, created in `DefaultTargetOU`.
+
+## Sharing it with your team
+
+Once it works, hand over a package rather than the repository:
+
+```powershell
+.\Build-OnboardKitPackage.ps1 -IncludeConfig
+```
+
+That produces `dist\MSPOnboardKit-<version>.zip` with the scripts, module and docs, versioned
+from the module manifest. `-IncludeConfig` bundles your filled-in `config.psd1` so the
+recipient has nothing to configure; leave it off and they get `config.example.psd1` instead.
+It defaults to off deliberately.
+
+If everyone is on the same network, a shared folder beats passing zips around — one copy of
+`config.psd1` means one place to fix when an OU moves.
+
+> `config.psd1` holds no credentials, but it does describe your domain, tenant ID and OU
+> layout, and `ProtectedOUs` is effectively a map of where your privileged accounts live.
+> Keep packages built with `-IncludeConfig` inside your organisation.
+
+Recipients must run `Get-ChildItem -Recurse | Unblock-File` after extracting, or PowerShell
+refuses to run scripts that arrived by email or Teams. Full detail, including what the
+recipient does next, is in
+[SETUP.md section 12](docs/SETUP.md#12-sharing-this-with-other-admins).
 
 ## 📘 Full setup guide
 
@@ -128,14 +161,18 @@ Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck   # Pester 5
 Invoke-Pester .\tests
 ```
 
-**81 tests, all passing.** They need no Active Directory and no Microsoft 365 tenant: the logic
+**88 tests, all passing.** They need no Active Directory and no Microsoft 365 tenant: the logic
 lives in pure functions in the `OnboardKit` module, and the single function that queries AD is
 isolated specifically so it can be mocked.
 
 Covered: alias generation and collision handling · name normalisation (accents, apostrophes,
 hyphens) · `sAMAccountName` truncation · password length, complexity and uniqueness · config
 loading, defaults and validation · distinguished-name parsing, including escaped commas ·
-protected-OU matching · licensing-group validation.
+protected-OU matching · licensing-group validation · the packaging manifest.
+
+That last one guards against drift: it reads the file list out of
+`Build-OnboardKitPackage.ps1` and asserts every entry exists, so renaming a script without
+updating the packager fails a test instead of silently shipping a zip with a file missing.
 
 Several of those exist because the case is a silent-wrong-answer bug rather than a crash — a
 user named `Smith, John` whose DN contains an escaped comma, or an `OU=Admin` entry that a

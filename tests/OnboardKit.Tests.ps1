@@ -664,3 +664,91 @@ Describe 'config.example.psd1' {
         $example.Graph.TenantId               | Should -Be '00000000-0000-0000-0000-000000000000'
     }
 }
+
+
+Describe 'Build-OnboardKitPackage.ps1' {
+
+    BeforeAll {
+        $script:RepoRoot   = Split-Path -Parent $PSScriptRoot
+        $script:BuildPath  = Join-Path $script:RepoRoot 'Build-OnboardKitPackage.ps1'
+
+        # Reads the packaging list out of the script's AST rather than running
+        # it, so the test costs nothing and cannot produce a zip as a side
+        # effect. Only the initial $items = @(...) assignment is read; the
+        # config file added afterwards depends on -IncludeConfig.
+        function Get-PackagedItem {
+            param([string] $Path)
+
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$null)
+
+            $assignment = $ast.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $node.Left.VariablePath.UserPath -eq 'items'
+            }, $true) | Select-Object -First 1
+
+            if (-not $assignment) { return @() }
+
+            $assignment.Right.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
+            }, $true) | ForEach-Object { $_.Value }
+        }
+    }
+
+    It 'is present in the repository' {
+        $script:BuildPath | Should -Exist
+    }
+
+    It 'has no syntax errors' {
+        $errors = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            $script:BuildPath, [ref]$null, [ref]$errors)
+
+        $errors | Should -BeNullOrEmpty
+    }
+
+    # The drift test. Renaming or adding a script without updating the
+    # packaging list produces a zip that is quietly missing a file, and the
+    # recipient only finds out when the toolkit fails on their machine.
+    It 'lists only paths that actually exist' {
+        $items = Get-PackagedItem -Path $script:BuildPath
+        $items | Should -Not -BeNullOrEmpty
+
+        foreach ($item in $items) {
+            Join-Path $script:RepoRoot $item |
+                Should -Exist -Because "Build-OnboardKitPackage.ps1 packages '$item'"
+        }
+    }
+
+    It 'packages every entry-point script' {
+        $items = Get-PackagedItem -Path $script:BuildPath
+
+        foreach ($script in @('New-OnboardUser.ps1', 'Add-OnboardUserLicense.ps1', 'Test-OnboardKitSetup.ps1')) {
+            $items | Should -Contain $script
+        }
+    }
+
+    It 'packages the module and the documentation' {
+        $items = Get-PackagedItem -Path $script:BuildPath
+
+        $items | Should -Contain 'OnboardKit'
+        $items | Should -Contain 'docs'
+    }
+
+    It 'does not ship the tests or the repository plumbing' {
+        $items = Get-PackagedItem -Path $script:BuildPath
+
+        foreach ($excluded in @('tests', '.git', '.gitignore', '.claude', 'dist')) {
+            $items | Should -Not -Contain $excluded
+        }
+    }
+
+    # config.psd1 must only ever be included deliberately, via -IncludeConfig.
+    It 'does not package a real config by default' {
+        $items = Get-PackagedItem -Path $script:BuildPath
+
+        $items | Should -Not -Contain 'config.psd1'
+    }
+}
