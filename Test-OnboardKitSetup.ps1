@@ -69,6 +69,30 @@ $ErrorActionPreference = 'Continue'
 $script:Results = New-Object System.Collections.Generic.List[object]
 
 
+# Some failures - Kerberos ones especially - put the useful detail in an inner
+# exception and leave "see inner exception" on the outside. Walk the chain so
+# the person running this actually gets told what went wrong.
+function Get-ExceptionDetail {
+    param(
+        [Parameter(Mandatory)][System.Exception] $Exception
+    )
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $current = $Exception
+    $depth = 0
+
+    while ($current -and $depth -lt 5) {
+        $text = $current.Message.Trim()
+        if ($text -and -not $lines.Contains($text)) {
+            $lines.Add($text)
+        }
+        $current = $current.InnerException
+        $depth++
+    }
+
+    $lines -join "`n"
+}
+
 function Add-Result {
     param(
         [Parameter(Mandatory)][string] $Check,
@@ -266,23 +290,30 @@ else {
 
     Import-Module ActiveDirectory -ErrorAction SilentlyContinue
 
+    # Every AD lookup below gets these. Empty when Server is not configured,
+    # which leaves behaviour on a domain-joined machine exactly as it was.
+    $adCommon = @{}
+    if ($config.Server) {
+        $adCommon['Server'] = $config.Server
+    }
+
     $domainReachable = $false
 
     try {
-        $adDomain = Get-ADDomain -ErrorAction Stop
+        $adDomain = Get-ADDomain @adCommon -ErrorAction Stop
         $domainReachable = $true
         Add-Result -Check 'Domain reachable' -Status 'Pass' -Message $adDomain.DNSRoot
     }
     catch {
         Add-Result -Check 'Domain reachable' -Status 'Fail' `
             -Message 'Could not contact Active Directory.' `
-            -Fix "Are you on the company network or VPN, and signed in with a domain account?`n$($_.Exception.Message)"
+            -Fix "Are you on the company network or VPN, and signed in with a domain account?`n$(Get-ExceptionDetail -Exception $_.Exception)"
     }
 
     if ($domainReachable) {
 
         try {
-            $null = Get-ADOrganizationalUnit -Identity $config.DefaultTargetOU -ErrorAction Stop
+            $null = Get-ADOrganizationalUnit -Identity $config.DefaultTargetOU @adCommon -ErrorAction Stop
             Add-Result -Check 'DefaultTargetOU' -Status 'Pass' -Message $config.DefaultTargetOU
         }
         catch {
@@ -293,7 +324,7 @@ else {
 
         foreach ($protectedOu in $config.ProtectedOUs) {
             try {
-                $null = Get-ADOrganizationalUnit -Identity $protectedOu -ErrorAction Stop
+                $null = Get-ADOrganizationalUnit -Identity $protectedOu @adCommon -ErrorAction Stop
                 Add-Result -Check "ProtectedOU '$protectedOu'" -Status 'Pass' -Message 'Exists.'
             }
             catch {
@@ -307,7 +338,7 @@ else {
 
         # Is the email domain usable as a sign-in suffix at all?
         try {
-            $adForest = Get-ADForest -ErrorAction Stop
+            $adForest = Get-ADForest @adCommon -ErrorAction Stop
 
             $validSuffixes = @($adForest.UPNSuffixes) + @($adDomain.DNSRoot) + @($adForest.RootDomain) |
                 Where-Object { $_ } |
@@ -346,7 +377,7 @@ Suffixes currently available: $($validSuffixes -join ', ')
         try {
             $sampleUsers = @(
                 Get-ADUser -SearchBase $config.DefaultTargetOU -Filter 'Enabled -eq $true' `
-                    -Properties UserPrincipalName, mail -ResultSetSize 200 -ErrorAction Stop |
+                    -Properties UserPrincipalName, mail -ResultSetSize 200 @adCommon -ErrorAction Stop |
                     Where-Object { $_.mail }
             )
 
@@ -403,7 +434,7 @@ suffix must be getting it from somewhere.
 
         foreach ($groupName in $config.DefaultGroups) {
             try {
-                $null = Get-ADGroup -Identity $groupName -ErrorAction Stop
+                $null = Get-ADGroup -Identity $groupName @adCommon -ErrorAction Stop
                 Add-Result -Check "Group '$groupName'" -Status 'Pass' -Message 'Exists.'
             }
             catch {

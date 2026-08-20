@@ -125,6 +125,12 @@ See docs/SETUP.md section 6 for where to find each value.
     if (-not $config.ContainsKey('AdSyncServer') -or $null -eq $config['AdSyncServer']) {
         $config['AdSyncServer'] = ''
     }
+    # The domain to direct AD lookups at. Empty means "let Windows find a
+    # domain controller", which is right on a domain-joined machine and
+    # impossible off one.
+    if (-not $config.ContainsKey('Server') -or $null -eq $config['Server']) {
+        $config['Server'] = ''
+    }
     # Defaults to on: "mirror this person" ought to mean placement as well as
     # group membership, especially where OUs carry Group Policy.
     if (-not $config.ContainsKey('MirrorTargetOU') -or $null -eq $config['MirrorTargetOU']) {

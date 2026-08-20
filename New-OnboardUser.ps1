@@ -191,7 +191,11 @@ Import-Module ActiveDirectory -ErrorAction Stop
 $config = Import-OnboardKitConfig -ConfigPath $ConfigPath
 
 # Every AD cmdlet in this script gets these, so an explicit -Server flows
-# through consistently.
+# through consistently. The parameter wins; config is the fallback.
+if (-not $Server) {
+    $Server = $config.Server
+}
+
 $adCommon = @{}
 if ($Server) {
     $adCommon['Server'] = $Server

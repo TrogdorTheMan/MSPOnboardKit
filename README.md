@@ -61,9 +61,16 @@ attached — and explains which of those is wrong.
 
 ## Requirements
 
+- **A domain-joined computer**, signed in with a domain account that can create users
 - **Windows PowerShell 5.1+** and the `ActiveDirectory` module (RSAT) — for step 1
 - **PowerShell 7 recommended** and the `Microsoft.Graph` modules — for step 2
 - Entra ID licensing group(s) that already carry the license SKUs (a one-time admin task)
+
+> **The domain-joined requirement is a hard one.** A machine that is not on the domain cannot
+> locate a domain controller through DNS, so Kerberos never gets a ticket and the AD steps fail
+> with `The credentials supplied to the package were not recognized` — an error that looks like
+> a bad password and is not. `runas /netonly` does not work around it.
+> [SETUP.md section 3.6](docs/SETUP.md#36-run-this-from-a-domain-joined-computer) explains why.
 
 > **Installing RSAT must be done from Windows PowerShell 5.1, not PowerShell 7.** The `DISM`
 > module has no native PowerShell 7 build, so `Add-WindowsCapability` fails there with
@@ -141,6 +148,7 @@ Everything environment-specific lives in `config.psd1`. Nothing is hardcoded in 
 | `MirrorTargetOU` | Whether mirroring also copies OU placement (default `$true`) |
 | `ProtectedOUs` | OUs that auto-placement must never choose |
 | `AdSyncServer` | Entra Connect host, if the sync must be triggered remotely |
+| `Server` | Advanced — pin lookups to a specific domain or DC. Normally empty |
 | `TempPasswordLength` | Length of the generated temporary password |
 | `Licensing.GroupNames` | Entra ID groups that carry the license SKUs |
 | `Graph.*` | Tenant ID and how the licensing step authenticates |

@@ -127,6 +127,25 @@
     AdSyncServer = ''
 
     # -----------------------------------------------------------------------
+    # ADVANCED, and almost always left empty - which domain or domain
+    # controller to direct Active Directory lookups at.
+    #
+    # Leave this as '' (empty). Windows then picks a domain controller by
+    # itself, which is what you want.
+    #
+    # The toolkit must be run from a domain-joined computer (see docs/SETUP.md
+    # section 3.6). This setting does NOT change that - it cannot make the
+    # toolkit work from a machine that is not on the domain.
+    #
+    # Set it only if you have a specific reason:
+    #   - a forest with several domains, and you need a particular one
+    #   - pinning tests to one named domain controller
+    #
+    #   Server = 'corp.example.com'
+    # -----------------------------------------------------------------------
+    Server = ''
+
+    # -----------------------------------------------------------------------
     # OPTIONAL - length of the generated temporary password.
     # Must be at least 12. The new hire is forced to change it at first
     # logon, so longer is fine.

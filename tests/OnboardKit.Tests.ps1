@@ -331,6 +331,7 @@ Describe 'Import-OnboardKitConfig' {
 
         $config.DefaultGroups          | Should -BeNullOrEmpty
         $config.AdSyncServer           | Should -Be ''
+        $config.Server                 | Should -Be ''
         $config.TempPasswordLength     | Should -Be 16
         $config.MirrorTargetOU         | Should -BeTrue
         $config.ProtectedOUs           | Should -BeNullOrEmpty
@@ -649,7 +650,7 @@ Describe 'config.example.psd1' {
         $example = Import-PowerShellDataFile -LiteralPath $path
 
         foreach ($key in @('Domain', 'AliasTemplate', 'DefaultTargetOU', 'DefaultGroups',
-                           'AdSyncServer', 'TempPasswordLength', 'Licensing', 'Graph',
+                           'AdSyncServer', 'Server', 'TempPasswordLength', 'Licensing', 'Graph',
                            'MirrorTargetOU', 'ProtectedOUs')) {
             $example.ContainsKey($key) | Should -BeTrue -Because "config.example.psd1 should document '$key'"
         }

@@ -243,6 +243,30 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 Type `Y` and press Enter. You only ever have to do this once.
 
+### 3.6 Run this from a domain-joined computer
+
+> **Requirement, not a preference.** The computer you run the toolkit from must be **joined to
+> the client's Active Directory domain**, and you must be signed in with a domain account that
+> has rights to create users.
+
+A computer that is not domain-joined cannot do three things the toolkit depends on, and no
+combination of settings works around all of them:
+
+- **Find a domain controller.** Windows locates one through the domain's own DNS. A non-joined
+  machine takes DNS from DHCP — usually a router or an ISP resolver — which knows nothing about
+  the internal AD domain.
+- **Authenticate.** With no domain controller reachable, Kerberos cannot get a ticket. The
+  failure surfaces as `The credentials supplied to the package were not recognized`, which reads
+  like a password problem and is not one.
+- **Trigger the directory sync.** That step uses PowerShell remoting to the Entra Connect
+  server, which needs domain membership.
+
+`runas /netonly` does not solve this. It supplies credentials but does not help Windows find a
+domain controller, and it never validates what you type, so a wrong password looks identical to
+a working session until something fails much later.
+
+A domain-joined server or admin workstation with RSAT installed is the right place to run this.
+
 ---
 
 ## 4. Get the code
@@ -406,6 +430,7 @@ notepad .\config.psd1
 | `MirrorTargetOU` | `$true` or `$false` | Leave `$true` so a new hire is created in the same OU as the mirror user. See ["Why placement matters"](#why-placement-matters) below |
 | `ProtectedOUs` | OUs never used automatically | Your admin, service-account and equipment OUs. Copy their distinguished names the same way as `DefaultTargetOU` |
 | `AdSyncServer` | Your Entra Connect server | Leave empty if you run the script on that server. Not sure? Leave it empty — the setup check will tell you |
+| `Server` | Leave empty | Advanced. Empty lets Windows pick a domain controller, which is what you want. Only set it to target a particular domain in a multi-domain forest, or to pin testing to one controller |
 | `TempPasswordLength` | How long the temporary password is | Leave at `16` unless you have a policy that says otherwise |
 | `Licensing.GroupNames` | Your license groups | The group names from [section 5](#5-one-time-microsoft-365-setup) |
 | `Graph.AuthMode` | How to sign in to Microsoft 365 | Leave as `'Delegated'` — that means "ask me to log in" |
@@ -753,6 +778,27 @@ Get-ChildItem -Path 'C:\Tools\MSPOnboardKit' -Recurse | Unblock-File
 The Active Directory tools are not installed. Go back to [section 3.2](#32-install-the-active-directory-tools-rsat).
 If you just installed them, **close PowerShell and open it again** — it only loads modules at
 startup.
+
+### "Unable to find a default server with Active Directory Web Services running"
+
+Windows does not know which domain controller to talk to. Almost always this means the computer
+you are working from is **not joined to the domain**, which the toolkit requires — see
+[section 3.6](#36-run-this-from-a-domain-joined-computer). Move to a domain-joined machine.
+
+On a computer that *is* domain-joined, this means the domain controller is unreachable. Check
+the network or VPN, and that the controller is up.
+
+### "The credentials supplied to the package were not recognized"
+
+Misleading error — it is usually **not** a password problem. It generally means Kerberos could
+not reach a domain controller to get a ticket at all, and the failure surfaces as a credential
+error. The usual cause is running from a computer that is not domain-joined, or DNS that does
+not point at the domain's own servers. See
+[section 3.6](#36-run-this-from-a-domain-joined-computer).
+
+If you also see `System error 67` or `System error 64` from `net use` against the domain
+controller, that confirms it: the machine cannot resolve or reach the DC, so the credentials
+were never actually tested.
 
 ### "The term 'Connect-MgGraph' is not recognized"
 
